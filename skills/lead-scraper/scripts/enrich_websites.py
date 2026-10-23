@@ -44,7 +44,7 @@ MAX_BYTES = 1_500_000
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 # Loose international phone matcher; results are post-filtered by digit count.
-PHONE_RE = re.compile(r"(?:\+?\d[\d\s().-]{7,}\d)")
+PHONE_RE = re.compile(r"(?:\+?\(?\d[\d\s().-]{7,}\d)")
 JUNK_EMAIL_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js")
 JUNK_EMAIL_PARTS = ("example.com", "sentry", "wixpress", "@2x", "domain.com", "email.com", "yourdomain")
 SOCIAL_PATTERNS = {
@@ -80,12 +80,18 @@ class PageParser(HTMLParser):
         self.title = ""
         self.description = ""
         self._in_title = False
+        self._title_done = False
+        self._svg_depth = 0
         self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
         a = dict(attrs)
-        if tag == "title":
-            self._in_title = True
+        if tag == "svg":
+            self._svg_depth += 1
+        elif tag == "title":
+            # Only the document title: SVG icons carry their own <title> elements.
+            if not self._title_done and not self._svg_depth:
+                self._in_title = True
         elif tag == "meta":
             name = (a.get("name") or a.get("property") or "").lower()
             if name in ("description", "og:description") and a.get("content") and not self.description:
@@ -103,8 +109,11 @@ class PageParser(HTMLParser):
             self._skip_depth += 1
 
     def handle_endtag(self, tag: str) -> None:
-        if tag == "title":
+        if tag == "svg" and self._svg_depth:
+            self._svg_depth -= 1
+        elif tag == "title" and self._in_title:
             self._in_title = False
+            self._title_done = True
         elif tag in ("script", "style") and self._skip_depth:
             self._skip_depth -= 1
 
@@ -233,33 +242,54 @@ def clean_emails(found: Iterable[str], domain: str) -> List[str]:
     return own + other
 
 
-def looks_like_phone(p: str) -> bool:
+PHONE_CONTEXT_RE = re.compile(r"(?:phone|tel|call|fax|mobile|cell|whatsapp|text us|contact)[^0-9+(]{0,40}$", re.I)
+YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
+
+
+def looks_like_phone(p: str, context: str = "") -> bool:
     """Heuristic for regex-found numbers (tel: links are trusted and skip this).
-    Bare digit runs are usually ids (Facebook pixel ids, timestamps), so a real
-    phone needs 2-5 digit groups separated by spaces, dots, dashes or parens."""
+    Pages are full of number-like strings (years, ids, timetables, coordinates), so
+    accept only strings that are formatted the way humans write phone numbers, or
+    that sit right after a 'phone/tel/call' label."""
     if "." in p and not re.search(r"\d\.\d{3}\.\d", p):
         return False
     groups = [g for g in re.split(r"[\s().-]+", p.strip()) if g]
+    if not all(g.lstrip("+").isdigit() for g in groups):
+        return False
+    if len(groups) == 1:
+        return p.startswith("+") and 10 <= len(groups[0]) <= 16 and groups[0][1] != "0"  # +18779762687
     if not 2 <= len(groups) <= 6:
         return False
-    first = groups[0].lstrip("+")
-    if len(first) < 2 and not groups[0].startswith("+") and first != "1":
+    first = groups[0]
+    if first.startswith("+"):
+        if first[1:2] == "0":
+            return False  # no country code starts with 0
+    elif first in ("0", "00") or (len(first) < 2 and first != "1"):
         return False  # "8-7166-4510-85" is an id; "1-800-..." is a phone
-    for g in groups[1:]:
-        if not g.isdigit() or not 2 <= len(g) <= 8:
-            return False
-    return first.isdigit() and 1 <= len(first) <= 5
+    if any(YEAR_RE.match(g) for g in groups) and not first.startswith("+"):
+        return False  # "1985-1990", "2026-10-22"
+    if any(len(g) > 8 for g in groups[1:]):
+        return False
+    strong = first.startswith("+") or p.lstrip().startswith("(") or PHONE_CONTEXT_RE.search(context) is not None
+    if all(len(g) <= 2 for g in groups):
+        return strong  # "30 12 13 14" is a calendar; "01 42 68 53 00" needs a Tel: label
+    return strong or len(groups) >= 3
 
 
-def clean_phones(trusted: Iterable[str], found: Iterable[str]) -> List[str]:
+def find_phones(text: str) -> List[Tuple[str, str]]:
+    """(candidate, preceding-context) pairs from visible page text."""
+    return [(m.group(0), text[max(0, m.start() - 60):m.start()]) for m in PHONE_RE.finditer(text)]
+
+
+def clean_phones(trusted: Iterable[str], found: Iterable[Tuple[str, str]]) -> List[str]:
     out: List[str] = []
     seen: Set[str] = set()
-    for p, is_trusted in [(t, True) for t in trusted] + [(f, False) for f in found]:
+    for p, ctx, is_trusted in [(t, "", True) for t in trusted] + [(f, c, False) for f, c in found]:
         p = re.sub(r"\s+", " ", p.strip())
         digits = re.sub(r"\D", "", p)
         if not (8 <= len(digits) <= 15) or len(set(digits)) <= 2 or DATE_RE.match(p):
             continue
-        if not is_trusted and not looks_like_phone(p):
+        if not is_trusted and not looks_like_phone(p, ctx):
             continue
         key = digits[-10:]
         if key in seen:
@@ -276,6 +306,8 @@ def extract_socials(html: str) -> Dict[str, str]:
             url = m.group(0).rstrip("/.,)")
             if any(j in url.lower() for j in SOCIAL_JUNK):
                 continue
+            if name == "linkedin":
+                url = re.sub(r"^(https?://[^/]+/(?:company|in|school)/[^/]+).*$", r"\1", url)
             out[name] = url
             break
     return out
@@ -304,7 +336,11 @@ def company_name_from_title(title: str, domain: str) -> str:
             return 100
         return sum(1 for w in re.findall(r"[a-z0-9]{3,}", seg.lower()) if w in stem)
     best = max(segments, key=overlap)
-    return (best if overlap(best) > 0 else segments[0])[:120]
+    name = best if overlap(best) > 0 else segments[0]
+    if len(name) > 60 or name.lower().startswith(("welcome to", "home")):
+        # Not a brand string; fall back to the domain stem ("acme-dental" -> "Acme Dental").
+        name = " ".join(w.capitalize() for w in re.split(r"[-_]", domain.split(".")[0]))
+    return name[:120]
 
 
 def pick_contact_links(base: str, links: Iterable[str], limit: int) -> List[str]:
@@ -368,7 +404,7 @@ def enrich_one(url: str, max_pages: int, throttle: HostThrottle, robots_cache: D
     row["domain"] = domain_of(base)
     emails: Set[str] = set()
     tels: List[str] = []
-    phones: List[str] = []
+    phones: List[Tuple[str, str]] = []
     socials: Dict[str, str] = {}
     tech: Set[str] = set()
     fetched = 1
@@ -383,7 +419,7 @@ def enrich_one(url: str, max_pages: int, throttle: HostThrottle, robots_cache: D
     emails.update(parser.mailtos)
     emails.update(EMAIL_RE.findall(html))
     tels.extend(parser.tels)
-    phones.extend(PHONE_RE.findall(re.sub(r"<[^>]+>", " ", html)))
+    phones.extend(find_phones(re.sub(r"<[^>]+>", " ", html)))
     socials.update(extract_socials(html))
     tech.update(detect_tech(html))
 
@@ -404,7 +440,7 @@ def enrich_one(url: str, max_pages: int, throttle: HostThrottle, robots_cache: D
         emails.update(sub.mailtos)
         emails.update(EMAIL_RE.findall(sub_html))
         tels.extend(sub.tels)
-        phones.extend(PHONE_RE.findall(re.sub(r"<[^>]+>", " ", sub_html)))
+        phones.extend(find_phones(re.sub(r"<[^>]+>", " ", sub_html)))
         for k, v in extract_socials(sub_html).items():
             socials.setdefault(k, v)
 
