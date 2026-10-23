@@ -1,0 +1,21 @@
+{
+  "name": "lead-scraper-skill",
+  "owner": { "name": "Andre Laurio", "url": "https://github.com/AndreLaurio" },
+  "metadata": {
+    "description": "Marketplace for the lead-scraper Claude Code skill",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "lead-scraper",
+      "source": "./",
+      "description": "Build scored B2B lead lists from public sources (OpenStreetMap + company websites).",
+      "version": "1.0.0",
+      "author": { "name": "Andre Laurio" },
+      "homepage": "https://github.com/AndreLaurio/lead-scraper-skill",
+      "license": "MIT",
+      "keywords": ["leads", "lead-generation", "prospecting", "b2b", "sales"],
+      "category": "productivity"
+    }
+  ]
+}

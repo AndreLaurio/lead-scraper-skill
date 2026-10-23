@@ -1,0 +1,10 @@
+{
+  "name": "lead-scraper",
+  "version": "1.0.0",
+  "description": "Build scored B2B lead lists from public sources (OpenStreetMap + company websites): discover companies by niche and place, extract emails/phones/socials, dedupe and export CSV.",
+  "author": { "name": "Andre Laurio", "url": "https://github.com/AndreLaurio" },
+  "homepage": "https://github.com/AndreLaurio/lead-scraper-skill",
+  "repository": "https://github.com/AndreLaurio/lead-scraper-skill",
+  "license": "MIT",
+  "keywords": ["leads", "lead-generation", "prospecting", "scraping", "b2b", "sales", "openstreetmap"]
+}

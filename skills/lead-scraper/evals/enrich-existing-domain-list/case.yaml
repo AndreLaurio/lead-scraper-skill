@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: enrich-existing-domain-list
+expected_outcome: |
+  The five rows from domains.csv come back in one CSV with emails, phones and linkedin
+  columns filled where the sites publish them, the original notes column preserved, and
+  rows ordered by a contactability score. Discovery is skipped since the list was provided.

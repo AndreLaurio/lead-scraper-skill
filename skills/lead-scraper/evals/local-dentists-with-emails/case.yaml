@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: local-dentists-with-emails
+expected_outcome: |
+  A CSV named like leads-dentists-austin.csv with roughly 30 dental practices in or around
+  Austin, each with a website and a phone, most with an email, deduplicated by domain and
+  sorted by score. The reply summarizes counts (with email / with phone) and where the data
+  came from. No individuals' personal data, no LinkedIn scraping.
